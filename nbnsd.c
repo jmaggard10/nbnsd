@@ -39,8 +39,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.  */
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-
-#define NETDEV	"eth0"
+#include <ifaddrs.h>
 
 #define NB_NAME_LEN	16
 
@@ -89,7 +88,6 @@ enum NB_SUFFIX
 const char *prog_name;
 int verbose = 0;
 
-static const char *netdev = NETDEV;
 static unsigned int port = 137;
 
 static inline uint16_t
@@ -194,30 +192,36 @@ get_nb_name (char *buf, size_t buf_size)
 }
 
 static int
-get_ipv4 (uint8_t addr[4])
+get_ipv4 (struct sockaddr_in *from, uint8_t ip_addr[4])
 {
-  struct ifreq ifr;
-  int fd, ret;
+  struct ifaddrs *ifap, *p;
+  struct sockaddr_in *addr, *mask;
+  int ret = -1;
 
-  /* fetch info from interface: */
-  fd = socket (PF_INET, SOCK_DGRAM, 0);
-  if (fd < 0)
+  if (getifaddrs(&ifap) != 0)
     {
-      fprintf (stderr, "%s: socket() failed (%s)", prog_name, strerror (errno));
+      fprintf (stderr, "%s: failed to get interface addresses (%s)",
+	       prog_name, strerror (errno));
       return -1;
     }
 
-  strncpy (ifr.ifr_name, netdev, sizeof (ifr.ifr_name));
-  ret = ioctl (fd, SIOCGIFADDR, &ifr);
-  close (fd);
-  if (ret < 0)
+  for (p = ifap; p != NULL; p = p->ifa_next)
     {
-      fprintf (stderr, "%s: failed to fetch IP address from %s (%s)",
-	       prog_name, netdev, strerror (errno));
-      return -1;
+      addr = (struct sockaddr_in *)p->ifa_addr;
+      mask = (struct sockaddr_in *)p->ifa_netmask;
+      if (p->ifa_flags & (IFF_LOOPBACK | IFF_SLAVE))
+        continue;
+      if (!addr || p->ifa_addr->sa_family != AF_INET)
+        continue;
+      if ((from->sin_addr.s_addr & mask->sin_addr.s_addr) !=
+          (addr->sin_addr.s_addr & mask->sin_addr.s_addr))
+        continue;
+      memcpy (ip_addr, &addr->sin_addr, 4);
+      ret = 0;
+      break;
     }
-  memcpy (addr, &((struct sockaddr_in *) &ifr.ifr_addr)->sin_addr, 4);
-  return 0;
+  freeifaddrs (ifap);
+  return ret;
 }
 
 static void
@@ -260,10 +264,6 @@ main (int argc, char **argv)
 	case 'h':
 	  usage (1);
 	  exit (0);
-
-	case 'i':
-	  netdev = optarg;
-	  break;
 
 	case 'n':
 	  if (set_nb_name (my_nb_name, sizeof (my_nb_name), optarg) < 0)
@@ -317,6 +317,8 @@ main (int argc, char **argv)
       from_len = sizeof (from);
       len = recvfrom (sd, pkt, sizeof (pkt), MSG_WAITALL,
 		      (struct sockaddr *) &from, &from_len);
+      if (len == -1)
+        continue;
       hdr = (struct nb_header *) pkt;
       tid = get16 (hdr->name_trn_id);
       flags = get16 (hdr->flags);
@@ -328,8 +330,8 @@ main (int argc, char **argv)
       nm_flags = (flags >> 4) & 0x7f;
       rcode = (flags >> 0) & 0xf;
       if (verbose)
-	printf ("%s: received message of size %zd bytes (from_len=%d)\n",
-		prog_name, len, from_len);
+	printf ("%s: received message of size %zd bytes from %s (from_len=%d)\n",
+		prog_name, len, inet_ntoa(from.sin_addr), from_len);
       if (verbose > 1)
 	printf (" Transaction id = 0x%x\n"
 		" Flags          = 0x%x\n"
@@ -386,7 +388,7 @@ main (int argc, char **argv)
       put16 (data + 8, rdlength);
       nb_flags = 0x2 << 1;	/* owner node type: B node */
       put16 (data + 10, nb_flags);
-      if (get_ipv4 (data + 12) < 0)
+      if (get_ipv4 (&from, data + 12) < 0)
 	continue;
       if (verbose)
 	printf ("%s: responding with IP address %s\n",
