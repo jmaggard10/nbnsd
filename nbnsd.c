@@ -30,6 +30,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.  */
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <arpa/inet.h>
 
@@ -111,6 +112,14 @@ put32 (uint8_t *dp, uint32_t val)
   dp[1] = val >> 16;
   dp[2] = val >> 8;
   dp[3] = val;
+}
+
+static void
+quit(int sig)
+{
+  if (verbose)
+    printf ("%s: quitting on signal %d\n", prog_name, sig);
+  _exit (0);
 }
 
 static int
@@ -299,6 +308,9 @@ main (int argc, char **argv)
 	       prog_name, port, strerror (errno));
       return -1;
     }
+
+  signal (SIGTERM, quit);
+  signal (SIGINT, quit);
 
   while (1)
     {
