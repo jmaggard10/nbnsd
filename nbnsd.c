@@ -265,10 +265,6 @@ main (int argc, char **argv)
 	  usage (1);
 	  exit (0);
 
-	case 'i':
-	  netdev = optarg;
-	  break;
-
 	case 'n':
 	  if (set_nb_name (my_nb_name, sizeof (my_nb_name), optarg) < 0)
 	    return -1;
